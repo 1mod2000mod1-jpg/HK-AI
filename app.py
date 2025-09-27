@@ -7,7 +7,7 @@ def keep_alive():
     while True:
         try:
             # أرسل طلباً إلى الرابط الخاص بك على Render
-            requests.get("https://mobi-kbdx.onrender.com/", timeout=5)
+            requests.get("https://HKGPT-kbdx.onrender.com/", timeout=5)
             print("✅ تم إرسال نبض حياة إلى Render")
         except:
             print("⚠️ فشل إرسال نبض حياة")
@@ -44,7 +44,7 @@ import os
 from datetime import datetime, timedelta
 
 # توكن البوت - سيتم تعيينه من متغير البيئة
-BOT_TOKEN = os.environ.get('BOT_TOKEN', '8389962293:AAHrLNDdcvL9M1jvTuv4n2pUKwa8F2deBYY')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '7309415250:AAG2dC7OTlot2iQqabzQpIruuG2Nn61-tKA')
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # قائمة المشرفين - أنت المشرف الرئيسي
