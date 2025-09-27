@@ -1,0 +1,10 @@
+services:
+  - type: worker  # غير من "web" إلى "worker"
+    name: telegram-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        value: 7309415250:AAG2dC7OTlot2iQqabzQpIruuG2Nn61-tKA
