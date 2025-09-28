@@ -35,15 +35,15 @@ def send_typing_action(chat_id):
         pass
 
 def get_ai_response(message_text):
-    """الحصول على رد من DeepSeek"""
+    """الحصول على رد من aimlapi"""
     try:
         headers = {
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Authorization": f"Bearer {aimlapi_API_KEY}",
             "Content-Type": "application/json"
         }
         
         data = {
-            "model": "deepseek-chat",
+            "model": "aimlapi-chat",
             "messages": [
                 {
                     "role": "system", 
