@@ -6,7 +6,7 @@ import json
 app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+DEEPSEEK_API_KEY = os.getenv('aimlapi_API_KEY')
 
 def send_telegram_message(chat_id, text):
     """إرسال رسالة عبر تليجرام API مباشرة"""
