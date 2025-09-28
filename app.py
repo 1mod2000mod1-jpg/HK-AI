@@ -1,289 +1,158 @@
-import threading
+import os
 import requests
-import time
+from flask import Flask, request
+import json
 
-# وظيفة إبقاء البوت نشطاً
-def keep_alive():
-    while True:
-        try:
-            # أرسل طلباً إلى الرابط الخاص بك على Render
-            requests.get("https://HKGPT-kbdx.onrender.com/", timeout=5)
-            print("✅ تم إرسال نبض حياة إلى Render")
-        except:
-            print("⚠️ فشل إرسال نبض حياة")
-        time.sleep(300)  # كل 5 دقائق
-
-# بدء وظيفة إبقاء البوت نشطاً
-heartbeat_thread = threading.Thread(target=keep_alive)
-heartbeat_thread.daemon = True
-heartbeat_thread.start()
-from flask import Flask
-import threading
-
-# إنشاء تطبيق Flask بسيط
 app = Flask(__name__)
+
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+
+def send_telegram_message(chat_id, text):
+    """إرسال رسالة عبر تليجرام API مباشرة"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {
+        "chat_id": chat_id,
+        "text": text
+    }
+    try:
+        response = requests.post(url, json=data, timeout=10)
+        return response.json()
+    except Exception as e:
+        print(f"Telegram API error: {e}")
+        return None
+
+def send_typing_action(chat_id):
+    """إظهار حالة الكتابة"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction"
+    data = {
+        "chat_id": chat_id,
+        "action": "typing"
+    }
+    try:
+        requests.post(url, json=data, timeout=5)
+    except:
+        pass
+
+def get_ai_response(message_text):
+    """الحصول على رد من DeepSeek"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": "deepseek-chat",
+            "messages": [
+                {
+                    "role": "system", 
+                    "content": "أنت مساعد مفيد ومهذب. ارد باللغة العربية ما لم يطلب منك غير ذلك."
+                },
+                {
+                    "role": "user",
+                    "content": message_text
+                }
+            ],
+            "stream": False,
+            "max_tokens": 2000,
+            "temperature": 0.7
+        }
+        
+        response = requests.post(
+            "https://api.deepseek.com/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result["choices"][0]["message"]["content"]
+        else:
+            return f"❌ خطأ في API: {response.status_code}"
+            
+    except Exception as e:
+        return f"❌ خطأ في الاتصال: {str(e)}"
 
 @app.route('/')
 def home():
-    return "🤖 البوت يعمل بشكل صحيح! ✅"
+    return '''
+    <h1>🤖 بوت DeepSeek يعمل!</h1>
+    <p>✅ البوت جاهز للاستخدام</p>
+    <p><a href="/setwebhook">🔗 تعيين الويبهوك</a></p>
+    '''
 
-# تشغيل Flask في thread منفصل
-def run_flask():
-    app.run(host='0.0.0.0', port=8000)
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.method == 'POST':
+        try:
+            data = request.get_json()
+            
+            if 'message' in data and 'text' in data['message']:
+                chat_id = data['message']['chat']['id']
+                message_text = data['message']['text']
+                
+                print(f"💬 رسالة من {chat_id}: {message_text}")
+                
+                if message_text == '/start':
+                    send_telegram_message(
+                        chat_id, 
+                        '🌐 **مرحبا! أنا بوت DeepSeek**\n\n'
+                        '💬 يمكنك سؤالي عن أي موضوع:\n'
+                        '• معلومات عامة\n• برمجة\n• كتابة نصوص\n• ترجمة\n• وغيرها!\n\n'
+                        '✍️ **جرب الآن:** اكتب سؤالك الأول'
+                    )
+                elif message_text == '/help':
+                    send_telegram_message(
+                        chat_id, 
+                        '🆘 **كيفية الاستخدام:**\n'
+                        '/start - بدء التشغيل\n'
+                        '/help - المساعدة\n'
+                        '💬 اكتب أي سؤال للحصول على إجابة ذكية'
+                    )
+                elif message_text == '/status':
+                    send_telegram_message(chat_id, '✅ البوت يعمل بشكل مثالي!')
+                else:
+                    send_typing_action(chat_id)
+                    response = get_ai_response(message_text)
+                    
+                    # إذا كان الرد طويلاً، نقسمه
+                    if len(response) > 4000:
+                        for i in range(0, len(response), 4000):
+                            send_telegram_message(chat_id, response[i:i+4000])
+                    else:
+                        send_telegram_message(chat_id, response)
+            
+            return 'OK'
+            
+        except Exception as e:
+            print(f"❌ خطأ في الويبهوك: {e}")
+            return 'Error', 500
 
-# بدء Flask عندما يبدأ البوت
-flask_thread = threading.Thread(target=run_flask)
-flask_thread.daemon = True
-flask_thread.start()
-
-# باقي كود البوت يبقى كما هو...
-import telebot
-import requests
-import sqlite3
-import os
-from datetime import datetime, timedelta
-
-# توكن البوت - سيتم تعيينه من متغير البيئة
-BOT_TOKEN = os.environ.get('BOT_TOKEN', '7309415250:AAG2dC7OTlot2iQqabzQpIruuG2Nn61-tKA')
-bot = telebot.TeleBot(BOT_TOKEN)
-
-# قائمة المشرفين - أنت المشرف الرئيسي
-ADMINS = [6521966233]  # تم إضافة أيديك الخاص كمشرف
-
-# تهيئة قاعدة البيانات
-def init_db():
-    conn = sqlite3.connect('bot_data.db')
-    c = conn.cursor()
-    
-    # جدول الأعضاء المحظورين
-    c.execute('''CREATE TABLE IF NOT EXISTS banned_users
-                 (user_id INTEGER PRIMARY KEY, 
-                  reason TEXT, 
-                  banned_at TIMESTAMP)''')
-    
-    # جدول المشتركين
-    c.execute('''CREATE TABLE IF NOT EXISTS subscribed_users
-                 (user_id INTEGER PRIMARY KEY,
-                  subscribed_at TIMESTAMP,
-                  expires_at TIMESTAMP)''')
-    
-    # جدول المشرفين الإضافيين
-    c.execute('''CREATE TABLE IF NOT EXISTS admins 
-                 (user_id INTEGER PRIMARY KEY)''')
-    
-    # إضافة الأيدي الخاص بك كمشرف إذا لم يكن مضافاً
-    c.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (6521966233,))
-    
-    conn.commit()
-    conn.close()
-
-# استدعاء التهيئة عند البدء
-init_db()
-
-# ========== دوال التحقق من الصلاحيات ========== #
-def is_admin(user_id):
-    """التحقق إذا كان المستخدم مشرفاً"""
-    if user_id in ADMINS:
-        return True
-    
-    conn = sqlite3.connect('bot_data.db')
-    c = conn.cursor()
-    c.execute("SELECT * FROM admins WHERE user_id=?", (user_id,))
-    result = c.fetchone()
-    conn.close()
-    
-    return result is not None
-
-# ========== دوال الحظر ========== #
-def ban_user(user_id, reason="إساءة استخدام"):
-    conn = sqlite3.connect('bot_data.db')
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO banned_users VALUES (?, ?, ?)",
-              (user_id, reason, datetime.now()))
-    conn.commit()
-    conn.close()
-
-def unban_user(user_id):
-    conn = sqlite3.connect('bot_data.db')
-    c = conn.cursor()
-    c.execute("DELETE FROM banned_users WHERE user_id=?", (user_id,))
-    conn.commit()
-    conn.close()
-
-def is_banned(user_id):
-    conn = sqlite3.connect('bot_data.db')
-    c = conn.cursor()
-    c.execute("SELECT * FROM banned_users WHERE user_id=?", (user_id,))
-    result = c.fetchone()
-    conn.close()
-    return result is not None
-
-# ========== دوال الاشتراك ========== #
-def add_subscription(user_id, days=30):
-    conn = sqlite3.connect('bot_data.db')
-    c = conn.cursor()
-    subscribed_at = datetime.now()
-    expires_at = subscribed_at + timedelta(days=days)
-    c.execute("INSERT OR REPLACE INTO subscribed_users VALUES (?, ?, ?)",
-              (user_id, subscribed_at, expires_at))
-    conn.commit()
-    conn.close()
-
-def is_subscribed(user_id):
-    conn = sqlite3.connect('bot_data.db')
-    c = conn.cursor()
-    c.execute("SELECT expires_at FROM subscribed_users WHERE user_id=?", (user_id,))
-    result = c.fetchone()
-    conn.close()
-    
-    if result:
-        expires_at = datetime.strptime(result[0], '%Y-%m-%d %H:%M:%S.%f')
-        return datetime.now() < expires_at
-    return False
-
-# ========== أوامر البوت الأساسية ========== #
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    user_id = message.from_user.id
-    
-    if is_banned(user_id):
-        bot.reply_to(message, "❌ تم حظرك من استخدام البوت.")
-        return
-        
-    welcome_text = """
-    🌹 أهلاً وسهلاً بك!
-    
-    أنا بوت الذكاء الاصطناعي، يمكنك محاورتي في أي موضوع.
-    
-    📋 الأوامر المتاحة:
-    /help - عرض المساعدة
-    /mysub - التحقق من حالة الاشتراك
-    /subscribe - الاشتراك في البوت
-    """
-    
-    bot.reply_to(message, welcome_text)
-
-@bot.message_handler(commands=['help'])
-def show_help(message):
-    help_text = """
-    🆘 أوامر المساعدة:
-    
-    /start - بدء استخدام البوت
-    /help - عرض هذه المساعدة
-    /mysub - التحقق من حالة الاشتراك
-    /subscribe - الاشتراك في البوت
-    
-    للمشرفين فقط:
-    /ban - حظر مستخدم (بالرد على رسالته)
-    /unban - إلغاء حظر مستخدم
-    /addadmin - إضافة مشرف جديد
-    """
-    
-    bot.reply_to(message, help_text)
-
-@bot.message_handler(commands=['subscribe'])
-def subscribe_cmd(message):
-    user_id = message.from_user.id
-    add_subscription(user_id, 30)  # 30 يوم اشتراك
-    bot.reply_to(message, "✅ تم تفعيل اشتراكك لمدة 30 يوم!")
-
-@bot.message_handler(commands=['mysub'])
-def check_subscription(message):
-    user_id = message.from_user.id
-    
-    if is_subscribed(user_id):
-        bot.reply_to(message, "✅ اشتراكك مفعل ومازال صالحاً")
-    else:
-        bot.reply_to(message, "❌ ليس لديك اشتراك فعال. /subscribe")
-
-# ========== أوامر المشرفين ========== #
-@bot.message_handler(commands=['ban'])
-def ban_command(message):
-    user_id = message.from_user.id
-    
-    if not is_admin(user_id):
-        bot.reply_to(message, f"❌ ليس لديك صلاحية. رقمك: {user_id}")
-        return
-        
-    if message.reply_to_message:
-        target_id = message.reply_to_message.from_user.id
-        reason = message.text.split(' ', 1)[1] if len(message.text.split()) > 1 else "إساءة استخدام"
-        
-        ban_user(target_id, reason)
-        bot.reply_to(message, f"✅ تم حظر المستخدم {target_id}")
-    else:
-        bot.reply_to(message, "❌ يجب الرد على رسالة المستخدم لحظره.")
-
-@bot.message_handler(commands=['unban'])
-def unban_command(message):
-    user_id = message.from_user.id
-    
-    if not is_admin(user_id):
-        bot.reply_to(message, "❌ ليس لديك صلاحية لهذا الأمر.")
-        return
-        
+@app.route('/setwebhook', methods=['GET'])
+def set_webhook():
+    """تعيين الويبهوك"""
     try:
-        target_id = int(message.text.split()[1])
-        unban_user(target_id)
-        bot.reply_to(message, f"✅ تم إلغاء حظر المستخدم {target_id}")
-    except:
-        bot.reply_to(message, "❌ استخدم: /unban <user_id>")
-
-@bot.message_handler(commands=['addadmin'])
-def add_admin_command(message):
-    user_id = message.from_user.id
-    
-    if not is_admin(user_id):
-        bot.reply_to(message, "❌ ليس لديك صلاحية لهذا الأمر.")
-        return
+        webhook_url = f"https://{request.host}/webhook"
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook"
+        data = {"url": webhook_url}
         
-    try:
-        new_admin_id = int(message.text.split()[1])
+        response = requests.post(url, json=data)
+        result = response.json()
         
-        conn = sqlite3.connect('bot_data.db')
-        c = conn.cursor()
-        c.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (new_admin_id,))
-        conn.commit()
-        conn.close()
-        
-        bot.reply_to(message, f"✅ تم إضافة المشرف الجديد: {new_admin_id}")
-    except:
-        bot.reply_to(message, "❌ استخدم: /addadmin <user_id>")
-
-# ========== معالجة الرسائل العادية ========== #
-@bot.message_handler(func=lambda message: True)
-def handle_all_messages(message):
-    user_id = message.from_user.id
-    user_name = message.from_user.first_name
-    
-    # التحقق من الحظر
-    if is_banned(user_id):
-        bot.reply_to(message, "❌ تم حظرك من استخدام البوت.")
-        return
-        
-    # التحقق من الاشتراك
-    if not is_subscribed(user_id):
-        bot.reply_to(message, f"⚠️ عذراً {user_name},\nيجب الاشتراك لاستخدام البوت.\n\nاستخدم /subscribe للاشتراك")
-        return
-    
-    # إظهار حالة "يكتب..." للمستخدم
-    bot.send_chat_action(message.chat.id, 'typing')
-    
-    # معالجة الرسالة باستخدام الذكاء الاصطناعي
-    try:
-        txt = message.text
-        res = requests.get(f"https://api.se7eneyes.org/v1/chat/completions{txt}", timeout=10)
-        res.raise_for_status()
-        data = res.json()
-        response = data.get("response", "❌ لا يوجد رد من الخادم")
-        bot.reply_to(message, response)
+        return f'''
+        <h1>✅ تم تعيين الويبهوك بنجاح!</h1>
+        <p><strong>الرابط:</strong> {webhook_url}</p>
+        <p><strong>الحالة:</strong> {result}</p>
+        <p>🎉 البوت جاهز للاستخدام في تليجرام!</p>
+        '''
     except Exception as e:
-        print(f"Error: {e}")
-        bot.reply_to(message, "⚠️ عذراً، حدث خطأ في المعالجة")
+        return f'<h1>❌ خطأ:</h1><p>{e}</p>'
 
-# ========== تشغيل البوت ========== #
-if __name__ == "__main__":
-    print("✅ البوت يعمل بنجاح!")
-    print("🤖 نظام الحظر والاشتراك مفعل")
-    print(f"👑 أنت المشرف الرئيسي: 6521966233")
-    bot.infinity_polling()
+if __name__ == '__main__':
+    print("🚀 بدء تشغيل البوت...")
+    print("✅ مفتاح DeepSeek صحيح!")
+    
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
