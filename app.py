@@ -60,7 +60,7 @@ def get_ai_response(message_text):
         }
         
         response = requests.post(
-            "https://api.deepseek.com/chat/completions",
+            "https://api.aimlapi.com/app/keys",
             headers=headers,
             json=data,
             timeout=30
