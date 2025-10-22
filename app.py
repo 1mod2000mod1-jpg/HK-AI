@@ -251,9 +251,9 @@ def send_welcome(message):
         return
         
     welcome_text = """
-🌹 أهلاً وسهلاً بك في موبي!
+🌹 أهلاً وسهلاً بك في موبي الشرير!
 
-أنا بوت الذكاء الاصطناعي، يمكنك محاورتي في أي موضوع.
+أنا بوت الذكاء الشرير😈، يمكنك محاورتي في أي موضوع.
 
 📋 الأوامر المتاحة:
 /help - عرض المساعدة
@@ -447,7 +447,7 @@ def home():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>موبي - بوت الذكاء الاصطناعي</title>
+<title>😈موبي - بوت الذكاء الشرير😈</title>
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 
@@ -944,29 +944,29 @@ body {{
 
 <div id="loginModal">
     <div class="login-box">
-        <h2>🕷️ موبي</h2>
+        <h2>🕷️ موبي 🕷️</h2>
         <p>أدخل رمز الدخول للمتابعة</p>
         <input type="text" id="accessCodeInput" placeholder="أدخل رمز الدخول..." autocomplete="off">
-        <button id="loginBtn">🚀 دخول</button>
+        <button id="loginBtn">😈 دخول 😈</button>
         <div id="loginError" class="error-message"></div>
     </div>
 </div>
 
 <div class="container" id="chatContainer" style="display: none;">
     <div class="header">
-        <h1>✨ موبي - الذكاء الاصطناعي ✨</h1>
-        <p>🚀 مساعدك الذكي في كل وقت ومكان</p>
+        <h1>😈✨ موبي - الذكاء الشرير 😈✨</h1>
+        <p>😈✨ مساعدك الذكي والشرير في كل وقت ومكان</p>
     </div>
     <div class="chat-box" id="chatBox">
         <div class="message bot">
             <div class="message-content">
-                مرحباً! 👋 أنا موبي، بوت الذكاء الاصطناعي الخاص بك. كيف يمكنني مساعدتك اليوم؟ ✨
+                مرحباً! ✨🖕🏻" أنا موبي، بوت الذكاء الشرير . كيف يمكنني إرشادك اليوم؟ ✨
             </div>
         </div>
     </div>
     <div class="input-area">
-        <input type="text" id="messageInput" placeholder="اكتب رسالتك هنا..." autocomplete="off"/>
-        <button id="sendBtn">✈️ إرسال</button>
+        <input type="text" id="messageInput" placeholder="اكتب كلماتك الذكيه هنا..." autocomplete="off"/>
+        <button id="sendBtn">😈✨ إرسال 😈✨</button>
     </div>
 </div>
 
