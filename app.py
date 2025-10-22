@@ -351,18 +351,3 @@ if __name__ == '__main__':
     # تشغيل خادم Flask
     logger.info(f"🌐 الخادم يعمل على المنفذ: {port}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-    # --- الجزء الأهم الذي كان ناقصاً: تشغيل البوت والخادم معاً ---
-def run_bot():
-    logger.info("🤖 بدء تشغيل البوت بالاستطلاع...")
-    bot.polling(none_stop=True)
-
-if __name__ == '__main__':
-    # ... (بقية الكود) ...
-    
-    # تشغيل البوت في خيط منفصل حتى لا يعطل عمل خادم Flask
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
-    
-    # تشغيل خادم Flask
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
