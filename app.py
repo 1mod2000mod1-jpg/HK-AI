@@ -944,7 +944,7 @@ body {{
 
 <div id="loginModal">
     <div class="login-box">
-        <h2>🕷️ موبي الشرير 🕷️</h2>
+        <h2>😈 موبي الشرير 😈</h2>
         <p>أدخل رمز الدخول للمتابعة</p>
         <input type="text" id="accessCodeInput" placeholder="أدخل رمز الدخول..." autocomplete="off">
         <button id="loginBtn">😈 دخول 😈</button>
@@ -954,8 +954,8 @@ body {{
 
 <div class="container" id="chatContainer" style="display: none;">
     <div class="header">
-        <h1>😈✨ موبي - الذكاء الشرير 😈✨</h1>
-        <p>😈✨ مساعدك الذكي والشرير في كل وقت ومكان</p>
+        <h1>😈✨ موبي - الذكاء الشرير ✨😈</h1>
+        <p>😈✨ مساعدك الذكي والشرير في كل وقت ومكان ✨😈</p>
     </div>
     <div class="chat-box" id="chatBox">
         <div class="message bot">
@@ -965,7 +965,7 @@ body {{
         </div>
     </div>
     <div class="input-area">
-        <input type="text" id="messageInput" placeholder="اكتب كلماتك الذكيه هنا..." autocomplete="off"/>
+        <input type="text" id="messageInput" placeholder="أكتب كلماتك الأخيره هنا..." autocomplete="off"/>
         <button id="sendBtn">😈✨ إرسال 😈✨</button>
     </div>
 </div>
