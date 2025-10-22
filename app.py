@@ -966,7 +966,7 @@ body {{
     </div>
     <div class="input-area">
         <input type="text" id="messageInput" placeholder="أكتب كلماتك الأخيره هنا..." autocomplete="off"/>
-        <button id="sendBtn">😈✨ إرسال 😈✨</button>
+        <button id="sendBtn">😈 إرسال 😈</button>
     </div>
 </div>
 
