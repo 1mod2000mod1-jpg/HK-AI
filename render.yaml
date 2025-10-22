@@ -1,10 +1,14 @@
 services:
-  - type: worker  # غير من "web" إلى "worker"
-    name: telegram-bot
+  # Backend (Flask + Telegram Bot)
+  - type: web
+    name: ai-bot-backend
     env: python
-    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: gunicorn app:app
     envVars:
       - key: BOT_TOKEN
-        value: 7309415250:AAG2dC7OTlot2iQqabzQpIruuG2Nn61-tKA
+        sync: false
+      - key: API_SECRET
+        generateValue: true
+      - key: PYTHON_VERSION
+        value: 3.11.0
