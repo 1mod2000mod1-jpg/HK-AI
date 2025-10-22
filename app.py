@@ -944,7 +944,7 @@ body {{
 
 <div id="loginModal">
     <div class="login-box">
-        <h2>🕷️ موبي 🕷️</h2>
+        <h2>🕷️ موبي الشرير 🕷️</h2>
         <p>أدخل رمز الدخول للمتابعة</p>
         <input type="text" id="accessCodeInput" placeholder="أدخل رمز الدخول..." autocomplete="off">
         <button id="loginBtn">😈 دخول 😈</button>
