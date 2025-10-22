@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timedelta
 import secrets
 from functools import wraps
+import threading
 
 # إعداد نظام التسجيل لتتبع الأخطاء
 logging.basicConfig(
@@ -30,16 +31,24 @@ bot = telebot.TeleBot(BOT_TOKEN)
 ADMINS = [6521966233]  # <--- ضع هنا معرفك كأدمن
 API_SECRET_KEY = os.environ.get('API_SECRET_KEY', secrets.token_urlsafe(32))
 
-# --- دوال قاعدة البيانات (لم تتغير، ولكن تم تحسينها بالتعامل مع الأخطاء) ---
+# --- دوال قاعدة البيانات (الكاملة والمحسنة) ---
 def init_db():
     try:
         conn = sqlite3.connect('bot_data.db', check_same_thread=False)
         c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS banned_users (user_id INTEGER PRIMARY KEY, reason TEXT, banned_at TIMESTAMP)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS subscribed_users (user_id INTEGER PRIMARY KEY, subscribed_at TIMESTAMP, expires_at TIMESTAMP)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS web_sessions (session_id TEXT PRIMARY KEY, created_at TIMESTAMP, message_count INTEGER DEFAULT 0, last_request TIMESTAMP, access_code TEXT)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS web_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, message TEXT, response TEXT, created_at TIMESTAMP)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS access_codes (code TEXT PRIMARY KEY, created_by INTEGER, created_at TIMESTAMP, used_count INTEGER DEFAULT 0, max_uses INTEGER DEFAULT 1, active INTEGER DEFAULT 1)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS banned_users
+                     (user_id INTEGER PRIMARY KEY, reason TEXT, banned_at TIMESTAMP)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS subscribed_users
+                     (user_id INTEGER PRIMARY KEY, subscribed_at TIMESTAMP, expires_at TIMESTAMP)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS web_sessions
+                     (session_id TEXT PRIMARY KEY, created_at TIMESTAMP, message_count INTEGER DEFAULT 0,
+                      last_request TIMESTAMP, access_code TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS web_messages
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, message TEXT,
+                      response TEXT, created_at TIMESTAMP)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS access_codes
+                     (code TEXT PRIMARY KEY, created_by INTEGER, created_at TIMESTAMP,
+                      used_count INTEGER DEFAULT 0, max_uses INTEGER DEFAULT 1, active INTEGER DEFAULT 1)''')
         conn.commit()
         conn.close()
         logger.info("Database initialized successfully")
@@ -83,11 +92,58 @@ def create_access_code(admin_id, max_uses=1):
         code = secrets.token_urlsafe(16)
         conn = sqlite3.connect('bot_data.db', check_same_thread=False)
         c = conn.cursor()
-        c.execute("INSERT INTO access_codes VALUES (?, ?, ?, 0, ?, 1)", (code, admin_id, datetime.now(), max_uses))
+        c.execute("INSERT INTO access_codes VALUES (?, ?, ?, 0, ?, 1)",
+                  (code, admin_id, datetime.now(), max_uses))
         conn.commit()
         conn.close()
         return code
     except Exception as e: logger.error(f"Error creating access code: {e}"); return None
+
+def create_session(access_code):
+    try:
+        session_id = secrets.token_urlsafe(32)
+        conn = sqlite3.connect('bot_data.db', check_same_thread=False)
+        c = conn.cursor()
+        c.execute("INSERT INTO web_sessions VALUES (?, ?, 0, ?, ?)",
+                  (session_id, datetime.now(), datetime.now(), access_code))
+        conn.commit()
+        conn.close()
+        return session_id
+    except Exception as e: logger.error(f"Error creating session: {e}"); return None
+
+def rate_limit_check(session_id, max_requests=20, window_minutes=60):
+    try:
+        conn = sqlite3.connect('bot_data.db', check_same_thread=False)
+        c = conn.cursor()
+        c.execute("SELECT message_count, last_request FROM web_sessions WHERE session_id=?", (session_id,))
+        result = c.fetchone()
+        if result:
+            count, last_req = result
+            if last_req:
+                last_request_time = datetime.strptime(last_req, '%Y-%m-%d %H:%M:%S.%f')
+                time_diff = datetime.now() - last_request_time
+                if time_diff > timedelta(minutes=window_minutes):
+                    c.execute("UPDATE web_sessions SET message_count=0, last_request=? WHERE session_id=?",
+                             (datetime.now(), session_id))
+                    conn.commit()
+                    conn.close()
+                    return True
+                if count >= max_requests:
+                    conn.close()
+                    return False
+        conn.close()
+        return True
+    except Exception as e: logger.error(f"Error in rate limit check: {e}"); return True
+
+def update_rate_limit(session_id):
+    try:
+        conn = sqlite3.connect('bot_data.db', check_same_thread=False)
+        c = conn.cursor()
+        c.execute("UPDATE web_sessions SET message_count = message_count + 1, last_request = ? WHERE session_id = ?",
+                  (datetime.now(), session_id))
+        conn.commit()
+        conn.close()
+    except Exception as e: logger.error(f"Error updating rate limit: {e}")
 
 def is_banned(user_id):
     try:
@@ -99,7 +155,17 @@ def is_banned(user_id):
         return result is not None
     except Exception as e: logger.error(f"Error checking if user is banned: {e}"); return False
 
-# --- مسارات الـ API (لم تتغير) ---
+def get_ai_response(text):
+    try:
+        res = requests.get(f"https://sii3.top/api/deepseek.php?v3={text}", timeout=10)
+        res.raise_for_status()
+        data = res.json()
+        return data.get("response", "❌ لا يوجد رد من الخادم")
+    except Exception as e:
+        logger.error(f"AI Error: {e}")
+        return "⚠️ عذراً، حدث خطأ في المعالجة"
+
+# --- مسارات الـ API (الكاملة) ---
 @app.route('/api/verify-code', methods=['POST'])
 @verify_api_key
 def verify_code():
@@ -107,15 +173,12 @@ def verify_code():
         data = request.get_json()
         code = data.get('code', '').strip()
         if verify_access_code(code):
-            session_id = secrets.token_urlsafe(32)
-            # حفظ الجلسة في قاعدة البيانات
-            conn = sqlite3.connect('bot_data.db', check_same_thread=False)
-            c = conn.cursor()
-            c.execute("INSERT INTO web_sessions VALUES (?, ?, 0, ?, ?)", (session_id, datetime.now(), datetime.now(), code))
-            conn.commit()
-            conn.close()
-            use_access_code(code)
-            return jsonify({"valid": True, "session_id": session_id})
+            session_id = create_session(code)
+            if session_id:
+                use_access_code(code)
+                return jsonify({"valid": True, "session_id": session_id})
+            else:
+                return jsonify({"valid": False, "error": "فشل في إنشاء جلسة"}), 500
         return jsonify({"valid": False, "error": "رمز غير صالح أو منتهي"}), 403
     except Exception as e: logger.error(f"Error in verify_code: {e}"); return jsonify({"valid": False, "error": "حدث خطأ في الخادم"}), 500
 
@@ -129,28 +192,33 @@ def web_chat():
         if not message: return jsonify({"error": "الرسالة فارغة"}), 400
         if not session_id: return jsonify({"error": "يجب تسجيل الدخول أولاً"}), 401
         
-        # هنا يمكنك إضافة المزيد من المنطق مثل التحقق من الجلسة وحدود الطلب
-        ai_response = "هذا رد تجريبي من البوت." # استبدل هذا باستدعاء الـ API الحقيقي
+        if not rate_limit_check(session_id):
+            return jsonify({"error": "لقد تجاوزت الحد الأقصى للطلبات. حاول مرة أخرى بعد ساعة."}), 429
+
+        update_rate_limit(session_id)
+        ai_response = get_ai_response(message)
         return jsonify({"response": ai_response, "session_id": session_id, "timestamp": datetime.now().isoformat()})
     except Exception as e: logger.error(f"Error in web_chat: {e}"); return jsonify({"error": "حدث خطأ في الخادم"}), 500
 
-# --- أوامر بوت تيليجرام ---
+# --- أوامر بوت تيليجرام (الكاملة) ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    user_id = message.from_user.id
-    if is_banned(user_id): bot.reply_to(message, "❌ تم حظرك."); return
-    bot.reply_to(message, "🕷️ أهلاً بك في موبي! استخدم /gencode لإنشاء رموز دخول للموقع.")
+    try:
+        user_id = message.from_user.id
+        if is_banned(user_id): bot.reply_to(message, "❌ تم حظرك."); return
+        bot.reply_to(message, "🕷️ أهلاً بك في موبي! استخدم /gencode لإنشاء رموز دخول للموقع.")
+    except Exception as e: logger.error(f"Error in send_welcome: {e}")
 
 @bot.message_handler(commands=['gencode'])
 def generate_code(message):
-    user_id = message.from_user.id
-    if user_id not in ADMINS:
-        bot.reply_to(message, "❌ هذا الأمر للأدمن فقط.")
-        return
     try:
+        user_id = message.from_user.id
+        if user_id not in ADMINS:
+            bot.reply_to(message, "❌ هذا الأمر للأدمن فقط.")
+            return
         parts = message.text.split()
         max_uses = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
-        if max_uses == 0: max_uses = -1 # غير محدود
+        if max_uses == 0: max_uses = -1
         
         code = create_access_code(user_id, max_uses)
         if code:
@@ -158,11 +226,36 @@ def generate_code(message):
             bot.reply_to(message, f"✅ تم إنشاء رمز جديد:\n\n`{code}`\n\nعدد الاستخدامات: {uses_text}", parse_mode='Markdown')
         else:
             bot.reply_to(message, "❌ فشل إنشاء الرمز.")
-    except Exception as e:
-        logger.error(f"Error in gencode: {e}")
-        bot.reply_to(message, "❌ حدث خطأ.")
+    except Exception as e: logger.error(f"Error in gencode: {e}"); bot.reply_to(message, "❌ حدث خطأ.")
 
-# --- مسار الويب الرئيسي مع الواجهة المخصصة ---
+@bot.message_handler(commands=['stats'])
+def stats_command(message):
+    try:
+        user_id = message.from_user.id
+        if user_id not in ADMINS: bot.reply_to(message, "❌ ليس لديك صلاحية لهذا الأمر."); return
+        
+        conn = sqlite3.connect('bot_data.db', check_same_thread=False)
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM web_sessions"); web_users = c.fetchone()[0]
+        c.execute("SELECT SUM(message_count) FROM web_sessions"); total_web_messages = c.fetchone()[0] or 0
+        c.execute("SELECT COUNT(*) FROM access_codes WHERE active=1"); active_codes = c.fetchone()[0]
+        conn.close()
+        
+        stats_text = f"""📊 إحصائيات موبي:
+🌐 مستخدمي الموقع: {web_users}
+💬 إجمالي رسائل الموقع: {total_web_messages}
+🔑 رموز الدخول النشطة: {active_codes}
+🚀 حالة البوت: نشط ✅"""
+        bot.reply_to(message, stats_text)
+    except Exception as e: logger.error(f"Error in stats_command: {e}")
+
+@bot.message_handler(func=lambda message: True)
+def handle_all_messages(message):
+    try:
+        bot.reply_to(message, "أنا بوت مخصص لإدارة الموقع فقط. تواصل معي عبر الموقع.")
+    except Exception as e: logger.error(f"Error in handle_all_messages: {e}")
+
+# --- مسار الويب الرئيسي مع الواجهة المخصصة والجميلة ---
 @app.route('/')
 def home():
     return f"""<!DOCTYPE html>
@@ -174,68 +267,22 @@ def home():
 <style>
     /* --- إعدادات عامة --- */
     * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-    body {{
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        background: #0a0a0a;
-        color: white;
-        height: 100vh;
-        overflow: hidden;
-        position: relative;
-    }}
+    body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0a0a0a; color: white; height: 100vh; overflow: hidden; position: relative; }}
 
     /* --- الخلفية المتحركة --- */
-    .bg-animation {{
-        position: fixed;
-        width: 100%;
-        height: 100%;
-        top: 0;
-        left: 0;
-        z-index: 1;
-    }}
-    .light {{
-        position: absolute;
-        border-radius: 50%;
-        filter: blur(80px);
-        opacity: 0.7;
-        animation: float 15s infinite ease-in-out;
-    }}
+    .bg-animation {{ position: fixed; width: 100%; height: 100%; top: 0; left: 0; z-index: 1; }}
+    .light {{ position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.7; animation: float 15s infinite ease-in-out; }}
     .light:nth-child(1) {{ width: 400px; height: 400px; background: linear-gradient(45deg, #ff006e, #8338ec); top: -150px; left: -150px; animation-delay: 0s; }}
     .light:nth-child(2) {{ width: 450px; height: 450px; background: linear-gradient(45deg, #3a86ff, #06ffa5); bottom: -150px; right: -150px; animation-delay: 3s; }}
     .light:nth-child(3) {{ width: 350px; height: 350px; background: linear-gradient(45deg, #fb5607, #ffbe0b); top: 50%; right: -150px; animation-delay: 6s; }}
     .light:nth-child(4) {{ width: 380px; height: 380px; background: linear-gradient(45deg, #06ffa5, #3a86ff); bottom: 20%; left: 10%; animation-delay: 2s; }}
     .light:nth-child(5) {{ width: 420px; height: 420px; background: linear-gradient(45deg, #8338ec, #ff006e); top: 20%; left: 50%; animation-delay: 5s; }}
-    @keyframes float {{
-        0%, 100% {{ transform: translate(0, 0) scale(1); }}
-        33% {{ transform: translate(80px, -80px) scale(1.1); }}
-        66% {{ transform: translate(-60px, 60px) scale(0.9); }}
-    }}
+    @keyframes float {{ 0%, 100% {{ transform: translate(0, 0) scale(1); }} 33% {{ transform: translate(80px, -80px) scale(1.1); }} 66% {{ transform: translate(-60px, 60px) scale(0.9); }} }}
 
     /* --- العنكبوت المتحرك --- */
-    #spider {{
-        position: fixed;
-        width: 50px;
-        height: 50px;
-        z-index: 100; /* تحت الواجهة، فوق الخلفية */
-        pointer-events: none;
-        transition: transform 0.1s linear;
-    }}
-    .spider-body {{
-        width: 25px;
-        height: 25px;
-        background: radial-gradient(circle, #444, #000);
-        border-radius: 50%;
-        position: absolute;
-        top: 12.5px;
-        left: 12.5px;
-        box-shadow: 0 0 15px rgba(138, 43, 226, 0.8);
-    }}
-    .spider-leg {{
-        position: absolute;
-        width: 20px;
-        height: 2px;
-        background: #222;
-        transform-origin: left center;
-    }}
+    #spider {{ position: fixed; width: 50px; height: 50px; z-index: 100; pointer-events: none; transition: transform 0.1s linear; }}
+    .spider-body {{ width: 25px; height: 25px; background: radial-gradient(circle, #444, #000); border-radius: 50%; position: absolute; top: 12.5px; left: 12.5px; box-shadow: 0 0 15px rgba(138, 43, 226, 0.8); }}
+    .spider-leg {{ position: absolute; width: 20px; height: 2px; background: #222; transform-origin: left center; }}
     .spider-leg:nth-child(1) {{ top: 5px; left: 12px; transform: rotate(-45deg); }}
     .spider-leg:nth-child(2) {{ top: 15px; left: 12px; transform: rotate(-20deg); }}
     .spider-leg:nth-child(3) {{ top: 25px; left: 12px; transform: rotate(20deg); }}
@@ -246,315 +293,76 @@ def home():
     .spider-leg:nth-child(8) {{ top: 35px; right: 12px; transform: rotate(-45deg) scaleX(-1); }}
 
     /* --- واجهة تسجيل الدخول --- */
-    #loginModal {{
-        display: flex;
-        position: fixed;
-        top: 0; left: 0;
-        width: 100%; height: 100%;
-        background: rgba(0,0,0,0.8);
-        z-index: 1000;
-        justify-content: center;
-        align-items: center;
-        backdrop-filter: blur(5px);
-    }}
-    .login-box {{
-        background: rgba(20, 20, 30, 0.95);
-        padding: 50px;
-        border-radius: 20px;
-        box-shadow: 0 20px 60px rgba(138, 43, 226, 0.5);
-        border: 2px solid rgba(138, 43, 226, 0.3);
-        text-align: center;
-        width: 90%;
-        max-width: 450px;
-        z-index: 1001;
-    }}
+    #loginModal {{ display: flex; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; justify-content: center; align-items: center; backdrop-filter: blur(5px); }}
+    .login-box {{ background: rgba(20, 20, 30, 0.95); padding: 50px; border-radius: 20px; box-shadow: 0 20px 60px rgba(138, 43, 226, 0.5); border: 2px solid rgba(138, 43, 226, 0.3); text-align: center; width: 90%; max-width: 450px; z-index: 1001; }}
     .login-box h2 {{ font-size: 36px; margin-bottom: 10px; background: linear-gradient(45deg, #8a2be2, #ff006e); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }}
     .login-box p {{ color: rgba(255,255,255,0.7); margin-bottom: 30px; }}
-    #accessCodeInput {{
-        width: 100%;
-        padding: 15px;
-        border: 2px solid rgba(138, 43, 226, 0.5);
-        border-radius: 15px;
-        background: rgba(255,255,255,0.05);
-        color: white;
-        font-size: 16px;
-        text-align: center;
-        margin-bottom: 20px;
-        outline: none;
-    }}
+    #accessCodeInput {{ width: 100%; padding: 15px; border: 2px solid rgba(138, 43, 226, 0.5); border-radius: 15px; background: rgba(255,255,255,0.05); color: white; font-size: 16px; text-align: center; margin-bottom: 20px; outline: none; }}
     #accessCodeInput:focus {{ border-color: #8a2be2; box-shadow: 0 0 20px rgba(138, 43, 226, 0.6); }}
-    #loginBtn {{
-        width: 100%;
-        padding: 15px;
-        background: linear-gradient(135deg, #8a2be2, #ff006e);
-        color: white;
-        border: none;
-        border-radius: 15px;
-        font-size: 18px;
-        font-weight: bold;
-        cursor: pointer;
-        transition: all 0.3s;
-    }}
+    #loginBtn {{ width: 100%; padding: 15px; background: linear-gradient(135deg, #8a2be2, #ff006e); color: white; border: none; border-radius: 15px; font-size: 18px; font-weight: bold; cursor: pointer; transition: all 0.3s; }}
     #loginBtn:hover {{ transform: scale(1.05); box-shadow: 0 8px 30px rgba(255, 0, 110, 0.7); }}
     .error-message {{ color: #ff006e; margin-top: 15px; font-size: 14px; }}
 
     /* --- واجهة الدردشة --- */
-    .container {{
-        display: none; /* مخفي افتراضياً */
-        position: fixed;
-        top: 0; left: 0;
-        width: 100%; height: 100%;
-        background: rgba(20, 20, 30, 0.85);
-        backdrop-filter: blur(20px);
-        z-index: 200;
-        flex-direction: column;
-    }}
-    .header {{
-        background: linear-gradient(135deg, rgba(138, 43, 226, 0.9), rgba(255, 0, 110, 0.9));
-        padding: 20px;
-        text-align: center;
-        z-index: 201;
-    }}
+    .container {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(20, 20, 30, 0.85); backdrop-filter: blur(20px); z-index: 200; flex-direction: column; }}
+    .header {{ background: linear-gradient(135deg, rgba(138, 43, 226, 0.9), rgba(255, 0, 110, 0.9)); padding: 20px; text-align: center; z-index: 201; }}
     .header h1 {{ font-size: 28px; }}
-    .chat-box {{
-        flex: 1;
-        padding: 20px;
-        overflow-y: auto;
-        z-index: 201;
-    }}
-    .input-area {{
-        padding: 20px;
-        display: flex;
-        gap: 10px;
-        background: rgba(20, 20, 30, 0.9);
-        z-index: 201;
-    }}
-    #messageInput {{
-        flex: 1;
-        padding: 12px;
-        border: 2px solid rgba(138, 43, 226, 0.5);
-        border-radius: 25px;
-        background: rgba(255,255,255,0.05);
-        color: white;
-        outline: none;
-    }}
-    #sendBtn {{
-        padding: 12px 25px;
-        background: linear-gradient(135deg, #8a2be2, #ff006e);
-        color: white;
-        border: none;
-        border-radius: 25px;
-        cursor: pointer;
-        font-weight: bold;
-    }}
-
-    /* --- جعل التصميم متجاوب (يبدو نفس الشكل على الموبايل) --- */
-    @media (max-width: 768px) {{
-        .container, .login-box {{
-            /* لا نغير العرض والارتفاع ليبقى كما هو على الكمبيوتر */
-            border-radius: 0; /* إزالة الاستدارة لتملأ الشاشة */
-        }}
-        .header h1 {{ font-size: 24px; }}
-        .login-box {{ padding: 40px 25px; }}
-    }}
+    .chat-box {{ flex: 1; padding: 20px; overflow-y: auto; z-index: 201; }}
+    .input-area {{ padding: 20px; display: flex; gap: 10px; background: rgba(20, 20, 30, 0.9); z-index: 201; }}
+    #messageInput {{ flex: 1; padding: 12px; border: 2px solid rgba(138, 43, 226, 0.5); border-radius: 25px; background: rgba(255,255,255,0.05); color: white; outline: none; }}
+    #sendBtn {{ padding: 12px 25px; background: linear-gradient(135deg, #8a2be2, #ff006e); color: white; border: none; border-radius: 25px; cursor: pointer; font-weight: bold; }}
 </style>
 </head>
 <body>
-
-    <!-- الخلفية المتحركة -->
-    <div class="bg-animation">
-        <div class="light"></div>
-        <div class="light"></div>
-        <div class="light"></div>
-        <div class="light"></div>
-        <div class="light"></div>
-    </div>
-
-    <!-- العنكبوت المتحرك -->
-    <div id="spider">
-        <div class="spider-leg"></div>
-        <div class="spider-leg"></div>
-        <div class="spider-leg"></div>
-        <div class="spider-leg"></div>
-        <div class="spider-leg"></div>
-        <div class="spider-leg"></div>
-        <div class="spider-leg"></div>
-        <div class="spider-leg"></div>
-        <div class="spider-body"></div>
-    </div>
-
-    <!-- واجهة تسجيل الدخول -->
-    <div id="loginModal">
-        <div class="login-box">
-            <h2>🕷️ موبي</h2>
-            <p>أدخل رمز الدخول للمتابعة</p>
-            <input type="text" id="accessCodeInput" placeholder="أدخل رمز الدخول..." autocomplete="off">
-            <button id="loginBtn">🚀 دخول</button>
-            <div id="loginError" class="error-message"></div>
-        </div>
-    </div>
-
-    <!-- واجهة الدردشة -->
-    <div class="container" id="chatContainer">
-        <div class="header">
-            <h1>✨ موبي - الذكاء الاصطناعي ✨</h1>
-        </div>
-        <div class="chat-box" id="chatBox">
-            <div class="message bot">
-                <div class="message-content">مرحباً! 👋 أنا موبي، كيف يمكنني مساعدتك؟</div>
-            </div>
-        </div>
-        <div class="input-area">
-            <input type="text" id="messageInput" placeholder="اكتب رسالتك هنا..." autocomplete="off"/>
-            <button id="sendBtn">✈️ إرسال</button>
-        </div>
-    </div>
-
+    <div class="bg-animation"><div class="light"></div><div class="light"></div><div class="light"></div><div class="light"></div><div class="light"></div></div>
+    <div id="spider"><div class="spider-leg"></div><div class="spider-leg"></div><div class="spider-leg"></div><div class="spider-leg"></div><div class="spider-leg"></div><div class="spider-leg"></div><div class="spider-leg"></div><div class="spider-leg"></div><div class="spider-body"></div></div>
+    <div id="loginModal"><div class="login-box"><h2>🕷️ موبي</h2><p>أدخل رمز الدخول للمتابعة</p><input type="text" id="accessCodeInput" placeholder="أدخل رمز الدخول..." autocomplete="off"><button id="loginBtn">🚀 دخول</button><div id="loginError" class="error-message"></div></div></div>
+    <div class="container" id="chatContainer"><div class="header"><h1>✨ موبي - الذكاء الاصطناعي ✨</h1></div><div class="chat-box" id="chatBox"><div class="message bot"><div class="message-content">مرحباً! 👋 أنا موبي، كيف يمكنني مساعدتك؟</div></div></div><div class="input-area"><input type="text" id="messageInput" placeholder="اكتب رسالتك هنا..." autocomplete="off"/><button id="sendBtn">✈️ إرسال</button></div></div>
 <script>
-    // --- منطق العنكبوت المتحرك ---
-    const spider = document.getElementById('spider');
-    let spiderX = window.innerWidth / 2, spiderY = window.innerHeight / 2;
-    let targetLightIndex = 0;
-
-    function moveSpider() {{
-        const lights = document.querySelectorAll('.light');
-        if (lights.length === 0) return;
-        
-        const targetLight = lights[targetLightIndex];
-        const rect = targetLight.getBoundingClientRect();
-        const targetX = rect.left + rect.width / 2;
-        const targetY = rect.top + rect.height / 2;
-        
-        const dx = targetX - spiderX;
-        const dy = targetY - spiderY;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        
-        if (distance < 100) {{
-            targetLightIndex = (targetLightIndex + 1) % lights.length;
-        }}
-        
-        const speed = 2;
-        spiderX += (dx / distance) * speed;
-        spiderY += (dy / distance) * speed;
-        
-        spider.style.left = spiderX + 'px';
-        spider.style.top = spiderY + 'px';
-        
-        const angle = Math.atan2(dy, dx) * 180 / Math.PI + 90;
-        spider.style.transform = `rotate(${{angle}}deg)`;
-        
-        requestAnimationFrame(moveSpider);
-    }}
-    moveSpider();
-
-    // --- منطق تسجيل الدخول والدردشة ---
-    const API_URL = '{{ request.url_root }}api/chat';
-    const VERIFY_URL = '{{ request.url_root }}api/verify-code';
-    const API_KEY = '{API_SECRET_KEY}';
-    let sessionId = localStorage.getItem('sessionId') || null;
-
-    const loginModal = document.getElementById('loginModal');
-    const chatContainer = document.getElementById('chatContainer');
-    const accessCodeInput = document.getElementById('accessCodeInput');
-    const loginBtn = document.getElementById('loginBtn');
-    const loginError = document.getElementById('loginError');
-    const chatBox = document.getElementById('chatBox');
-    const messageInput = document.getElementById('messageInput');
-    const sendBtn = document.getElementById('sendBtn');
-
-    if (sessionId) {{
-        loginModal.style.display = 'none';
-        chatContainer.style.display = 'flex';
-    }}
-
-    loginBtn.addEventListener('click', verifyCode);
-    accessCodeInput.addEventListener('keypress', (e) => {{ if (e.key === 'Enter') verifyCode(); }});
-
-    async function verifyCode() {{
-        const code = accessCodeInput.value.trim();
-        if (!code) {{ loginError.textContent = 'يرجى إدخال رمز الدخول'; return; }}
-        
-        loginBtn.disabled = true;
-        loginError.textContent = '';
-        
-        try {{
-            const response = await fetch(VERIFY_URL, {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json', 'X-API-Key': API_KEY }},
-                body: JSON.stringify({{ code: code }})
-            }});
-            
-            const data = await response.json();
-            
-            if (response.ok && data.valid) {{
-                sessionId = data.session_id;
-                localStorage.setItem('sessionId', sessionId);
-                loginModal.style.display = 'none';
-                chatContainer.style.display = 'flex';
-                messageInput.focus();
-            }} else {{
-                loginError.textContent = data.error || 'رمز غير صالح';
-                accessCodeInput.value = '';
-            }}
-        }} catch (error) {{
-            console.error('Error:', error);
-            loginError.textContent = 'حدث خطأ في الاتصال';
-        }}
-        
-        loginBtn.disabled = false;
-    }}
-
-    sendBtn.addEventListener('click', sendMessage);
-    messageInput.addEventListener('keypress', (e) => {{ if (e.key === 'Enter') sendMessage(); }});
-
-    async function sendMessage() {{
-        const message = messageInput.value.trim();
-        if (!message) return;
-
-        addMessage(message, 'user');
-        messageInput.value = '';
-        
-        try {{
-            const response = await fetch(API_URL, {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json', 'X-API-Key': API_KEY }},
-                body: JSON.stringify({{ message: message, session_id: sessionId }})
-            }});
-            
-            const data = await response.json();
-            addMessage(data.response, 'bot');
-        }} catch (error) {{
-            console.error('Error:', error);
-            addMessage('عذراً، حدث خطأ في الاتصال.', 'bot');
-        }}
-    }}
+    const spider = document.getElementById('spider'); let spiderX = window.innerWidth / 2, spiderY = window.innerHeight / 2; let targetLightIndex = 0;
+    function moveSpider() {{ const lights = document.querySelectorAll('.light'); if (lights.length === 0) return; const targetLight = lights[targetLightIndex]; const rect = targetLight.getBoundingClientRect(); const targetX = rect.left + rect.width / 2; const targetY = rect.top + rect.height / 2; const dx = targetX - spiderX; const dy = targetY - spiderY; const distance = Math.sqrt(dx * dx + dy * dy); if (distance < 100) {{ targetLightIndex = (targetLightIndex + 1) % lights.length; }} const speed = 2; spiderX += (dx / distance) * speed; spiderY += (dy / distance) * speed; spider.style.left = spiderX + 'px'; spider.style.top = spiderY + 'px'; const angle = Math.atan2(dy, dx) * 180 / Math.PI + 90; spider.style.transform = `rotate(${{angle}}deg)`; requestAnimationFrame(moveSpider); }} moveSpider();
     
-    function addMessage(text, type) {{
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `message ${{type}}`;
-        messageDiv.style.cssText = 'margin-bottom: 15px; display: flex; justify-content: ' + (type === 'user' ? 'flex-end' : 'flex-start') + ';';
-        
-        const contentDiv = document.createElement('div');
-        contentDiv.className = 'message-content';
-        contentDiv.style.cssText = 'max-width: 70%; padding: 12px 18px; border-radius: 18px; word-wrap: break-word;';
-        if (type === 'user') {{
-            contentDiv.style.background = 'linear-gradient(135deg, #8a2be2, #ff006e)';
-        }} else {{
-            contentDiv.style.background = 'rgba(58, 134, 255, 0.8)';
-        }}
-        contentDiv.textContent = text;
-        
-        messageDiv.appendChild(contentDiv);
-        chatBox.appendChild(messageDiv);
-        chatBox.scrollTop = chatBox.scrollHeight;
-    }}
+    const API_URL = '{{ request.url_root }}api/chat'; const VERIFY_URL = '{{ request.url_root }}api/verify-code'; const API_KEY = '{API_SECRET_KEY}'; let sessionId = localStorage.getItem('sessionId') || null;
+    const loginModal = document.getElementById('loginModal'); const chatContainer = document.getElementById('chatContainer'); const accessCodeInput = document.getElementById('accessCodeInput'); const loginBtn = document.getElementById('loginBtn'); const loginError = document.getElementById('loginError'); const chatBox = document.getElementById('chatBox'); const messageInput = document.getElementById('messageInput'); const sendBtn = document.getElementById('sendBtn');
+    if (sessionId) {{ loginModal.style.display = 'none'; chatContainer.style.display = 'flex'; }}
+    loginBtn.addEventListener('click', verifyCode); accessCodeInput.addEventListener('keypress', (e) => {{ if (e.key === 'Enter') verifyCode(); }});
+    async function verifyCode() {{ const code = accessCodeInput.value.trim(); if (!code) {{ loginError.textContent = 'يرجى إدخال رمز الدخول'; return; }} loginBtn.disabled = true; loginError.textContent = ''; try {{ const response = await fetch(VERIFY_URL, {{ method: 'POST', headers: {{ 'Content-Type': 'application/json', 'X-API-Key': API_KEY }}, body: JSON.stringify({{ code: code }}) }}); const data = await response.json(); if (response.ok && data.valid) {{ sessionId = data.session_id; localStorage.setItem('sessionId', sessionId); loginModal.style.display = 'none'; chatContainer.style.display = 'flex'; messageInput.focus(); }} else {{ loginError.textContent = data.error || 'رمز غير صالح'; accessCodeInput.value = ''; }} }} catch (error) {{ console.error('Error:', error); loginError.textContent = 'حدث خطأ في الاتصال'; }} loginBtn.disabled = false; }}
+    sendBtn.addEventListener('click', sendMessage); messageInput.addEventListener('keypress', (e) => {{ if (e.key === 'Enter') sendMessage(); }});
+    async function sendMessage() {{ const message = messageInput.value.trim(); if (!message) return; addMessage(message, 'user'); messageInput.value = ''; try {{ const response = await fetch(API_URL, {{ method: 'POST', headers: {{ 'Content-Type': 'application/json', 'X-API-Key': API_KEY }}, body: JSON.stringify({{ message: message, session_id: sessionId }}) }}); const data = await response.json(); addMessage(data.response, 'bot'); }} catch (error) {{ console.error('Error:', error); addMessage('عذراً، حدث خطأ في الاتصال.', 'bot'); }} }}
+    function addMessage(text, type) {{ const messageDiv = document.createElement('div'); messageDiv.className = `message ${{type}}`; messageDiv.style.cssText = 'margin-bottom: 15px; display: flex; justify-content: ' + (type === 'user' ? 'flex-end' : 'flex-start') + ';'; const contentDiv = document.createElement('div'); contentDiv.className = 'message-content'; contentDiv.style.cssText = 'max-width: 70%; padding: 12px 18px; border-radius: 18px; word-wrap: break-word;'; if (type === 'user') {{ contentDiv.style.background = 'linear-gradient(135deg, #8a2be2, #ff006e)'; }} else {{ contentDiv.style.background = 'rgba(58, 134, 255, 0.8)'; }} contentDiv.textContent = text; messageDiv.appendChild(contentDiv); chatBox.appendChild(messageDiv); chatBox.scrollTop = chatBox.scrollHeight; }}
 </script>
 </body>
 </html>"""
 
-# --- تشغيل التطبيق ---
+# --- الجزء الأهم الذي كان ناقصاً: تشغيل البوت والخادم معاً ---
+def run_bot():
+    logger.info("🤖 بدء تشغيل البوت بالاستطلاع...")
+    bot.polling(none_stop=True)
+
 if __name__ == '__main__':
     logger.info("🚀 بدء تشغيل موبي...")
-    # يمكنك إعداد الويب هوك هنا إذا أردت
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    
+    # تشغيل البوت في خيط منفصل حتى لا يعطل عمل خادم Flask
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # تشغيل خادم Flask
+    logger.info(f"🌐 الخادم يعمل على المنفذ: {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    # --- الجزء الأهم الذي كان ناقصاً: تشغيل البوت والخادم معاً ---
+def run_bot():
+    logger.info("🤖 بدء تشغيل البوت بالاستطلاع...")
+    bot.polling(none_stop=True)
+
+if __name__ == '__main__':
+    # ... (بقية الكود) ...
+    
+    # تشغيل البوت في خيط منفصل حتى لا يعطل عمل خادم Flask
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # تشغيل خادم Flask
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
