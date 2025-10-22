@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 import hashlib
 import secrets
 from functools import wraps
-import threading # <--- هذا هو الإضافة الوحيدة للمكتبة
 
 app = Flask(__name__)
 CORS(app)
@@ -440,10 +439,6 @@ def webhook():
         return '', 200
     else:
         return 'Invalid content type', 403
-
-# =================================================================
-# === كود HTML و CSS و JavaScript الأصلي بالكامل كما كان ===
-# =================================================================
 
 @app.route('/')
 def home():
@@ -1171,28 +1166,45 @@ function showTypingIndicator() {{
 </body>
 </html>"""
 
+
 @app.route('/health')
 def health_check():
-    return jsonify({"status": "healthy", "protected": True})
-
-# =================================================================
-# === الإصلاح التقني الوحيد في نهاية الكود ===
-# =================================================================
-
-def run_bot():
-    """دالة لتشغيل البوت في الخلفية"""
-    print("🤖 بدء تشغيل بوت تيليجرام...")
-    bot.polling(none_stop=True)
+    return jsonify({{"status": "healthy", "protected": True}})
 
 if __name__ == '__main__':
-    print("🚀 بدء تشغيل موبي...")
+    print("🚀 بدء تشغيل موبي المحمي...")
     
-    # تشغيل البوت في خيط منفصل
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
+    # تحقق من وجود BOT_TOKEN
+    if not BOT_TOKEN:
+        print("❌ خطأ: لم يتم العثور على متغير البيئة BOT_TOKEN.")
+    else:
+        print(f"🔒 API Secret Key: {API_SECRET_KEY[:10]}...")
+        
+        # الحصول على اسم المضيف الخارجي لـ Webhook
+        # استخدام RENDER_EXTERNAL_HOSTNAME إذا كان متاحاً، وإلا استخدام IP المحلي
+        external_hostname = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
+        
+        if external_hostname:
+            webhook_url = f"https://{external_hostname}/webhook"
+            
+            try:
+                bot.remove_webhook()
+                print("✅ تم حذف الويب هوك القديم")
+            except Exception as e:
+                print(f"⚠️ خطأ في حذف الويب هوك: {e}")
+            
+            try:
+                # تعيين الويب هوك الجديد
+                bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+                print(f"✅ تم تعيين الويب هوك: {webhook_url}")
+            except Exception as e:
+                print(f"⚠️ خطأ في تعيين الويب هوك: {e}")
+        else:
+            print("⚠️ ملاحظة: لم يتم العثور على RENDER_EXTERNAL_HOSTNAME، لن يتم تعيين Webhook. يفضل استخدامه في بيئات الإنتاج.")
+            # إذا لم يتم العثور على External Hostname، يمكن تشغيل البوت في وضع Polling هنا للتجربة المحلية 
+            # ولكن في بيئة إنتاج (مثل Render) يجب توفير الـ Webhook.
     
-    # تشغيل خادم الويب
     port = int(os.environ.get('PORT', 5000))
     print(f"🌐 الخادم يعمل على المنفذ: {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    # تشغيل تطبيق Flask لاستقبال طلبات الويب و Webhook
+    app.run(host='0.0.0.0', port=port, debug=False)
