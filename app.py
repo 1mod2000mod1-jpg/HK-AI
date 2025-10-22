@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import hashlib
 import secrets
 from functools import wraps
-import threading # <--- تم استيراد هذه المكتبة
+import threading # <--- هذا هو الإضافة الوحيدة للمكتبة
 
 app = Flask(__name__)
 CORS(app)
@@ -441,10 +441,13 @@ def webhook():
     else:
         return 'Invalid content type', 403
 
-# هنا أضع كود الـ HTML الأصلي الخاص بك
+# =================================================================
+# === كود HTML و CSS و JavaScript الأصلي بالكامل كما كان ===
+# =================================================================
+
 @app.route('/')
 def home():
-    return """<!DOCTYPE html>
+    return f"""<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -1173,7 +1176,7 @@ def health_check():
     return jsonify({"status": "healthy", "protected": True})
 
 # =================================================================
-# === الإصلاح الوحيد المطلوب هو هنا في الأسفل ===
+# === الإصلاح التقني الوحيد في نهاية الكود ===
 # =================================================================
 
 def run_bot():
