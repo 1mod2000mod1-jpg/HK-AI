@@ -183,7 +183,7 @@ def save_web_message(session_id, message, response):
 def get_ai_response(text):
     """دالة موحدة للحصول على رد من الذكاء الاصطناعي - محمية"""
     try:
-        res = requests.get(f"https://sii3.top/api/openai.php?gpt-5-mini={text}", timeout=50000)
+        res = requests.get(f"https://sii3.top/api/openai.php?gpt-5-mini={text}", timeout=10000)
         res.raise_for_status()
         data = res.json()
         return data.get("response", "❌ لا يوجد رد من الخادم")
